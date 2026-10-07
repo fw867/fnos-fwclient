@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>内网穿透</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="logo.svg" alt="" class="brand-logo">
+    <div>
+      <h1>内网穿透</h1>
+      <p class="sub">fwclient 客户端管理</p>
+    </div>
+  </div>
+  <div class="status-pill" id="pill">
+    <span class="dot" id="dot"></span>
+    <span id="pill-text">读取状态…</span>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="card-overview">
+    <div class="card-head">
+      <h2>运行状态</h2>
+      <button class="ghost" id="btn-refresh">刷新</button>
+    </div>
+    <div class="grid">
+      <div class="kv"><span>客户端进程</span><b id="v-running">-</b></div>
+      <div class="kv"><span>进程号 PID</span><b id="v-pid">-</b></div>
+      <div class="kv"><span>当前版本</span><b id="v-version">-</b></div>
+      <div class="kv"><span>网关域名</span><b id="v-gateway">-</b></div>
+      <div class="kv"><span>设备标识</span><b id="v-device" class="mono ellipsis">-</b></div>
+      <div class="kv"><span>日志文件</span><b id="v-logfile" class="mono ellipsis">-</b></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="btn-start">启动</button>
+      <button id="btn-stop">规范关闭</button>
+      <button id="btn-restart">重启</button>
+    </div>
+    <p class="hint" id="notice"></p>
+  </section>
+
+  <section class="card" id="card-config">
+    <div class="card-head"><h2>连接配置</h2></div>
+    <form id="config-form" autocomplete="off">
+      <label class="field">
+        <span>网关域名</span>
+        <input type="text" id="in-gateway" placeholder="例如 fw867.com" spellcheck="false">
+        <em>管理端「内网穿透」中显示的服务器域名或 IP，客户端通过 443 CONNECT 隧道接入。</em>
+      </label>
+      <label class="field">
+        <span>访问令牌</span>
+        <input type="password" id="in-token" placeholder="tk_xxxxxxxx（留空表示不修改）" spellcheck="false">
+        <em>管理端创建隧道时生成的令牌，以 tk_ 开头。留空表示保持原有令牌不变。</em>
+      </label>
+      <div class="switches">
+        <label class="switch">
+          <input type="checkbox" id="in-autostart">
+          <span>应用启动时自动连接</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="in-autoreconn">
+          <span>进程异常退出后自动重连</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="in-verifytls" checked>
+          <span>校验 TLS 证书（默认开启；仅自签证书场景才关闭）</span>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" type="submit" id="btn-save">保存配置</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="card-upgrade">
+    <div class="card-head">
+      <h2>版本与升级</h2>
+      <div class="actions inline">
+        <button id="btn-check-version">查询版本</button>
+        <button class="primary" id="btn-upgrade">检查并升级</button>
+      </div>
+    </div>
+    <p class="hint">升级会调用 <code>fwclient -u</code>，直接替换程序目录中的二进制文件；守护进程会在 1 分钟内自动重启加载新版本。</p>
+    <pre class="console" id="upgrade-out">（暂无升级输出）</pre>
+  </section>
+
+  <section class="card" id="card-logs">
+    <div class="card-head">
+      <h2>运行日志</h2>
+      <div class="actions inline">
+        <label class="switch small">
+          <input type="checkbox" id="in-follow" checked>
+          <span>自动刷新</span>
+        </label>
+        <select id="sel-lines">
+          <option value="100">100 行</option>
+          <option value="300" selected>300 行</option>
+          <option value="1000">1000 行</option>
+          <option value="3000">3000 行</option>
+        </select>
+        <button id="btn-logs-refresh">刷新</button>
+        <button id="btn-logs-clear" class="danger">清空</button>
+      </div>
+    </div>
+    <pre class="console" id="log-out">（暂无日志）</pre>
+    <p class="hint" id="log-meta"></p>
+  </section>
+</main>
+
+<footer>
+  <span id="foot-text">内网穿透 · fwclient</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

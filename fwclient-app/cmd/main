@@ -1,0 +1,58 @@
+#!/bin/bash
+# 内网穿透（fwclient）· 运行控制
+# 用法: main start|stop|status
+#
+# 该脚本管理的是「管理后台」进程，fwclient 客户端由管理后台按配置拉起并看护。
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+case "${1:-}" in
+start)
+    fwc_prepare_binaries
+    fwc_log "===== 启动 ${FWC_APPNAME} (${TRIM_APPVER:-?}) ====="
+
+    # 启动阶段环境已就绪：先确认目录可写，再确认程序文件在位
+    if ! fwc_ensure_dirs; then
+        fwc_fail "运行数据目录不可写：${FWC_VAR}，请检查应用目录权限"
+    fi
+    fwc_require_binaries
+
+    # 首次启动缺少配置时，尝试用安装向导残留值补齐
+    if [ ! -f "${FWC_CONFIG}" ]; then
+        fwc_log "未找到 ${FWC_CONFIG}，尝试用向导变量初始化"
+        if [ -n "${wizard_gateway:-}" ]; then
+            fwc_apply_wizard || true
+        fi
+    fi
+
+    if ! fwc_start_backend; then
+        fwc_fail "管理后台启动失败，请查看 ${FWC_VAR}/backend.log"
+    fi
+
+    # 管理后台会按配置自动拉起 fwclient；此处再做一次兜底
+    if ! fwc_start_client; then
+        fwc_log "fwclient 未能自动连接，可在管理页面中重试"
+    fi
+    exit 0
+    ;;
+stop)
+    fwc_log "===== 停止 ${FWC_APPNAME} ====="
+    fwc_stop_client
+    fwc_stop_backend
+    exit 0
+    ;;
+status)
+    if [ "$(fwc_backend_pid)" != "0" ]; then
+        exit 0
+    fi
+    exit 3
+    ;;
+*)
+    fwc_log "未知参数: ${1:-}"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,13 @@
+# 构建与本地临时产物
+_tmp/
+_tools/
+__pycache__/
+*.pyc
+
+# 本机联调环境（Windows 模拟 fwclient 与临时目录，不随仓库分发）
+_test/env/
+_test/ui.png
+
+# 运行期数据
+*.log
+var/

@@ -1,0 +1,14 @@
+#!/bin/bash
+# 卸载后：残留清理提示
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 卸载完成 ====="
+# 设备标识若被清理，重新安装后服务端会视为一台新设备，需要重新配置穿透规则
+if [ -f "${FWC_IDFILE}" ]; then
+    fwc_log "设备标识已保留：${FWC_IDFILE}"
+fi
+exit 0

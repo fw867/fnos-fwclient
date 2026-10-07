@@ -1,0 +1,18 @@
+[
+  {
+    "stepTitle": "卸载确认",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "卸载会停止内网穿透客户端并断开穿透连接。设备标识决定服务端如何识别这台设备，删除后重新安装需要在管理端重新配置穿透规则。"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_keep_data",
+        "label": "保留设备标识与运行数据",
+        "initValue": "true",
+        "helpText": "建议保留：重新安装后无需在管理端重新配置穿透规则。"
+      }
+    ]
+  }
+]

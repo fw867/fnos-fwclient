@@ -1,0 +1,22 @@
+#!/bin/bash
+# 卸载前：按用户选择处理数据，停止所有进程
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 开始卸载 ====="
+
+fwc_stop_client
+fwc_stop_backend
+
+# 设备标识按保留策略处理：默认随应用数据一起删除，用户可在卸载向导中选择保留
+if [ "${wizard_keep_data:-false}" = "true" ]; then
+    fwc_log "用户选择保留运行数据（设备标识 ${FWC_IDFILE}）"
+else
+    fwc_log "清理运行数据与设备标识"
+    rm -f "${FWC_IDFILE}" "${FWC_PIDFILE}" 2>/dev/null
+fi
+
+exit 0

@@ -1,0 +1,42 @@
+#!/bin/bash
+# 配置变更后：写入新配置并让管理后台使用新配置重连
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 应用配置变更 ====="
+fwc_prepare_binaries
+
+if ! fwc_apply_wizard; then
+    fwc_fail "配置写入失败"
+fi
+
+# 通过管理后台的接口触发重连；后台不可用时退回脚本直接重启
+restarted="no"
+port="${TRIM_SERVICE_PORT:-18443}"
+if command -v curl >/dev/null 2>&1; then
+    body="$(curl -sS -m 20 -X POST "http://127.0.0.1:${port}/api/restart" 2>/dev/null)"
+    case "${body}" in
+    *'"code":0'*)
+        restarted="yes"
+        fwc_log "已通过管理后台重启客户端"
+        ;;
+    "")
+        fwc_log "管理后台未响应"
+        ;;
+    *)
+        fwc_log "管理后台返回：${body}"
+        ;;
+    esac
+fi
+
+if [ "${restarted}" = "no" ]; then
+    fwc_log "改由脚本直接重启客户端"
+    fwc_stop_client
+    fwc_start_client || fwc_log "客户端重启失败，请在管理页面中手动启动"
+fi
+
+fwc_chown_app "${FWC_VAR}" "${FWC_ETC}" 2>/dev/null
+exit 0

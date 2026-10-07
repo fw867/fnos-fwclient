@@ -1,0 +1,35 @@
+#!/bin/bash
+# 安装后：写入配置、准备运行目录
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 安装完成，写入初始配置 ====="
+fwc_prepare_binaries
+fwc_note_layout
+
+# 目录可写性只在安装完成后校验；此处环境已由系统准备好
+if fwc_ensure_dirs; then
+    fwc_log "运行目录就绪：${FWC_RUNDIR}"
+else
+    fwc_log "警告：运行数据目录暂不可写，启动应用时会再次尝试"
+fi
+
+# 安装完成后程序文件应当已经就位，否则后面启动不了，这里给出明确提示
+if ! fwc_resolve_binaries; then
+    fwc_log "警告：未找到程序文件，启动应用时将再次尝试定位"
+fi
+
+if [ -n "${wizard_gateway:-}" ]; then
+    fwc_apply_wizard || fwc_log "初始配置写入失败，可在应用设置中重试"
+else
+    fwc_log "向导未提供网关域名，安装后请在应用设置中填写"
+fi
+
+# 记录版本，便于升级流程对比
+echo "${TRIM_APPVER:-unknown}" > "${FWC_VAR}/installed.version" 2>/dev/null
+
+fwc_chown_app "${FWC_VAR}" "${FWC_ETC}" 2>/dev/null
+exit 0

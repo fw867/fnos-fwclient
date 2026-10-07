@@ -1,0 +1,52 @@
+[
+  {
+    "stepTitle": "连接配置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "请先在管理端「内网穿透」中创建隧道，获取网关域名与访问令牌。安装完成后也可以在「应用设置 - 连接配置」中随时修改。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_gateway",
+        "label": "网关域名",
+        "initValue": "",
+        "placeholder": "例如 fw867.com",
+        "rules": [
+          {
+            "required": true,
+            "message": "请填写网关域名或 IP"
+          },
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "message": "网关域名只能包含字母、数字、点、连字符、下划线和冒号"
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_token",
+        "label": "访问令牌",
+        "initValue": "",
+        "placeholder": "tk_xxxxxxxx",
+        "rules": [
+          {
+            "required": true,
+            "message": "请填写访问令牌"
+          },
+          {
+            "pattern": "^tk_[A-Za-z0-9_.-]+$",
+            "message": "令牌格式不正确，应以 tk_ 开头"
+          }
+        ]
+      },
+      {
+        "type": "switch",
+        "field": "wizard_verify_tls",
+        "label": "校验 TLS 证书",
+        "initValue": "1",
+        "helpText": "默认开启，保证连接安全。仅当网关使用自签证书、连接报证书错误时，才关闭本项。"
+      }
+    ]
+  }
+]

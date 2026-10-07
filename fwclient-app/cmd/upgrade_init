@@ -1,0 +1,27 @@
+#!/bin/bash
+# 升级前：备份配置与设备标识
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 升级前准备（${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}）====="
+
+backup="${FWC_VAR}/upgrade-backup"
+mkdir -p "${backup}" 2>/dev/null
+
+# 设备标识必须保留，丢失会被服务端视为新设备
+for f in "${FWC_CONFIG}" "${FWC_IDFILE}" "${FWC_ETC}/fwclient.env"; do
+    if [ -f "${f}" ]; then
+        cp -f "${f}" "${backup}/$(basename "${f}")" 2>/dev/null
+        fwc_log "已备份 $(basename "${f}")"
+    fi
+done
+
+# 结束正在运行的服务，避免升级过程中二进制被占用
+fwc_stop_client
+fwc_stop_backend
+
+fwc_chown_app "${FWC_VAR}" "${FWC_ETC}" 2>/dev/null
+exit 0

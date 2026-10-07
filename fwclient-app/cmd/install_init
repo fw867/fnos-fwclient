@@ -1,0 +1,37 @@
+#!/bin/bash
+# 安装前检查：**只做只读探测，任何情况都不阻断安装**。
+#
+# 依据实测：fnOS 调用 install_init 时
+#   - TRIM_APPDEST（/vol1/@appcenter/<app>）尚未创建；
+#   - TRIM_PKGVAR（/vol1/@appdata/<app>）尚未创建或不可写。
+# 这些目录由系统在安装流程中创建并设置属主，所以这里既不能校验程序文件，
+# 也不能校验目录可写，否则会出现「无法安装」的误报。
+#
+# 真正的目录准备与程序校验放在 install_callback 与 cmd/main start（那时环境已就绪）。
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 安装前检查（只读） ====="
+
+# 日志目录先尽可能建起来，失败也不影响安装
+mkdir -p "${FWC_VAR}" 2>/dev/null
+
+fwc_note_layout
+
+# 记录目录可写性，仅用于排查，不作为失败条件
+fwc_note_writable "${FWC_APPDEST}" "应用目录"
+fwc_note_writable "${FWC_VAR}" "运行数据目录"
+fwc_note_writable "${FWC_ETC}" "配置目录"
+
+arch="$(uname -m)"
+fwc_log "系统架构 ${arch}（应用包为 x86_64）"
+case "${arch}" in
+x86_64 | amd64 | aarch64 | arm64) : ;;
+*) fwc_log "提示：当前架构 ${arch} 与应用包目标架构可能不一致" ;;
+esac
+
+fwc_log "安装前检查结束（不影响安装流程）"
+exit 0

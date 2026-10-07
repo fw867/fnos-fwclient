@@ -1,0 +1,23 @@
+#!/bin/bash
+# 配置变更前：校验向导输入
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 配置变更前检查 ====="
+
+gateway="${wizard_gateway:-}"
+token="${wizard_token:-}"
+
+if [ -n "${gateway}" ] && ! fwc_check_gateway "${gateway}"; then
+    fwc_fail "网关域名不合法：只允许字母、数字、点、连字符、下划线和冒号"
+fi
+
+# 令牌留空表示沿用原值，仅在填写时校验
+if [ -n "${token}" ] && ! fwc_check_token "${token}"; then
+    fwc_fail "访问令牌格式不正确，应形如 tk_xxxxxxxx"
+fi
+
+exit 0

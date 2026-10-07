@@ -1,0 +1,44 @@
+[
+  {
+    "stepTitle": "连接配置",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_gateway",
+        "label": "网关域名",
+        "initValue": "",
+        "placeholder": "例如 fw867.com",
+        "rules": [
+          {
+            "required": true,
+            "message": "请填写网关域名或 IP"
+          },
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "message": "网关域名只能包含字母、数字、点、连字符、下划线和冒号"
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_token",
+        "label": "访问令牌",
+        "initValue": "",
+        "placeholder": "留空表示不修改已保存的令牌",
+        "rules": [
+          {
+            "pattern": "^tk_[A-Za-z0-9_.-]+$",
+            "message": "令牌格式不正确，应以 tk_ 开头；留空表示保持原令牌"
+          }
+        ]
+      },
+      {
+        "type": "switch",
+        "field": "wizard_verify_tls",
+        "label": "校验 TLS 证书",
+        "initValue": "1",
+        "helpText": "默认开启，保证连接安全。仅当网关使用自签证书、连接报证书错误时，才关闭本项。"
+      }
+    ]
+  }
+]

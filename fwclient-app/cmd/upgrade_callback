@@ -1,0 +1,34 @@
+#!/bin/bash
+# 升级后：还原配置、修正权限、按状态恢复服务
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/lib.sh"
+
+fwc_log "===== 升级完成（${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}）====="
+fwc_prepare_binaries
+
+backup="${FWC_VAR}/upgrade-backup"
+if [ -f "${backup}/config.json" ] && [ ! -f "${FWC_CONFIG}" ]; then
+    mkdir -p "${FWC_ETC}"
+    cp -f "${backup}/config.json" "${FWC_CONFIG}" 2>/dev/null
+    chmod 600 "${FWC_CONFIG}" 2>/dev/null
+    fwc_log "已还原配置"
+fi
+if [ -f "${backup}/fwclient.id" ] && [ ! -f "${FWC_IDFILE}" ]; then
+    cp -f "${backup}/fwclient.id" "${FWC_IDFILE}" 2>/dev/null
+    fwc_log "已还原设备标识"
+fi
+
+echo "${TRIM_APPVER:-unknown}" > "${FWC_VAR}/installed.version" 2>/dev/null
+fwc_chown_app "${FWC_APPDEST}" "${FWC_VAR}" "${FWC_ETC}" 2>/dev/null
+
+# 升级完成后重新拉起服务
+if fwc_start_backend; then
+    fwc_start_client || fwc_log "客户端未能自动连接，可在管理页面中手动启动"
+else
+    fwc_log "管理后台未能启动，请在应用中心重新启动应用"
+fi
+
+exit 0

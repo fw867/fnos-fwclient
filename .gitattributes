@@ -1,0 +1,28 @@
+# Shell 脚本与配置文件必须以 LF 存入仓库，否则在 fnOS 上会出现
+# 「bad interpreter: /bin/bash^M」这类错误。
+*.sh        text eol=lf
+cmd/*       text eol=lf
+wizard/*    text eol=lf
+manifest    text eol=lf
+config/*    text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# 源码
+*.go        text eol=lf
+*.js        text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.svg       text eol=lf
+*.md        text eol=lf
+*.py        text eol=lf
+*.json      text eol=lf
+
+# 二进制不要做换行或文本转换
+*.fpk       binary
+*.PNG       binary
+*.png       binary
+*.exe       binary
+fwclient-linux-amd64 binary
+fwclient-app/app/bin/fwclient          binary
+fwclient-app/app/server/fwclient-server binary
