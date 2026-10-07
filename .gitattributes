@@ -26,6 +26,5 @@ config/*    text eol=lf
 *.PNG       binary
 *.png       binary
 *.exe       binary
-fwclient-linux-amd64 binary
 fwclient-app/app/bin/fwclient          binary
 fwclient-app/app/server/fwclient-server binary

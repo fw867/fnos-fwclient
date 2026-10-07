@@ -138,7 +138,10 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fwclient-app/manifest fwclient-app/backend/main.go
+          # 连打包用的后端二进制一起回写：它已经在这台 runner 上按新版本号重新编译过，
+          # 不回写的话仓库里会留着一个自报旧版本号的二进制
+          git add fwclient-app/manifest fwclient-app/backend/main.go \
+                  fwclient-app/app/server/fwclient-server
           if git diff --cached --quiet; then
             echo "版本号没有变化，跳过提交"
           else
