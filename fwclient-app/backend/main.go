@@ -35,7 +35,7 @@ const (
 	appName    = "fwclient"
 	appDisplay = "内网穿透"
 	// appVersion 是管理后端自身的版本，需与 fwclient-app/manifest 的 version 保持一致
-	appVersion = "1.0.3"
+	appVersion = "1.0.4"
 )
 
 // ---------------------------------------------------------------------------
