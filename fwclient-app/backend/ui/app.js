@@ -211,6 +211,90 @@
     });
   }
 
+  /* ---------------- 应用更新（GitHub Release） ---------------- */
+
+  var appUpdateBusy = false;
+
+  function appNotice(msg, kind) { noticeAt('app-update-notice', msg, kind); }
+
+  function renderAppUpdate(d) {
+    $('v-app-cur').textContent = d.current ? 'v' + d.current : '-';
+    $('v-app-latest').textContent = d.latest ? 'v' + d.latest : '读取失败';
+    $('v-app-date').textContent = d.publishedAt
+      ? new Date(d.publishedAt).toLocaleString()
+      : '-';
+
+    var notes = $('app-notes');
+    if (d.notes) {
+      notes.textContent = d.notes.length > 4000 ? d.notes.slice(0, 4000) + '\n…' : d.notes;
+      notes.hidden = false;
+    } else {
+      notes.hidden = true;
+    }
+
+    var link = $('app-release-link');
+    if (d.releaseUrl) {
+      link.href = d.releaseUrl;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+
+    var btn = $('btn-app-upgrade');
+    if (d.error) {
+      btn.disabled = true;
+      appNotice(d.error, 'err');
+      return;
+    }
+    if (!d.hasUpdate) {
+      btn.disabled = true;
+      btn.textContent = '已是最新版本';
+      appNotice('当前已是最新版本 v' + d.current, 'ok');
+      return;
+    }
+    btn.disabled = false;
+    // 系统里没有 appcenter-cli 时，只能下载后到应用中心手动安装
+    btn.textContent = d.installable ? '一键升级' : '下载最新版';
+    appNotice('发现新版本 v' + d.latest + '，点「' + btn.textContent + '」'
+      + (d.installable ? '自动下载并安装。' : '下载；当前用户无安装权限，需要到应用中心手动安装。'));
+  }
+
+  function refreshAppUpdate(force) {
+    return api('/api/app/update' + (force ? '?refresh=1' : '')).then(function (res) {
+      if (res.data) { renderAppUpdate(res.data); }
+      else if (res.code !== 0) { appNotice(res.msg, 'err'); }
+    }).catch(function (e) {
+      appNotice('检查更新失败：' + e.message, 'err');
+    });
+  }
+
+  function startAppUpgrade() {
+    if (appUpdateBusy) { return; }
+    appUpdateBusy = true;
+    setBusy($('btn-app-upgrade'), true);
+    setBusy($('btn-app-check'), true);
+    appNotice('正在下载最新应用包…');
+
+    api('/api/app/download', { method: 'POST', body: {} }).then(function (res) {
+      if (res.code !== 0) { throw new Error(res.msg); }
+      appNotice(res.msg + '，正在安装…');
+      return api('/api/app/install', { method: 'POST', body: {} });
+    }).then(function (res) {
+      if (res.code === 0) {
+        appNotice(res.msg, 'ok');
+        setTimeout(function () { location.reload(); }, 8000);
+      } else {
+        appNotice(res.msg, 'err');
+      }
+    }).catch(function (e) {
+      appNotice('升级失败：' + e.message + '（可在应用中心手动安装已下载的包）', 'err');
+    }).then(function () {
+      appUpdateBusy = false;
+      setBusy($('btn-app-check'), false);
+      refreshAppUpdate(false);
+    });
+  }
+
   /* ---------------- 绑定 ---------------- */
 
   function bind() {
@@ -229,6 +313,12 @@
     $('config-form').addEventListener('submit', saveConfig);
 
     $('btn-upgrade').addEventListener('click', startUpgrade);
+
+    $('btn-app-check').addEventListener('click', function () {
+      appNotice('正在查询 GitHub…');
+      refreshAppUpdate(true);
+    });
+    $('btn-app-upgrade').addEventListener('click', startAppUpgrade);
 
     $('btn-logs-refresh').addEventListener('click', refreshLogs);
     $('sel-lines').addEventListener('change', refreshLogs);
@@ -259,6 +349,7 @@
     refreshStatus();
     refreshLogs();
     setFollow($('in-follow').checked);
+    refreshAppUpdate(false);
     // 宿主主题变化时无需处理：CSS 使用 prefers-color-scheme 自适应
   });
 })();

@@ -96,12 +96,34 @@ func daemonPids(bin, runDir string) []int {
 	if bin == "" || runDir == "" {
 		return nil
 	}
+	base := filepath.Base(bin)
+	return scanProc(func(argv []string) bool {
+		if argv[0] != bin && filepath.Base(argv[0]) != base {
+			return false
+		}
+		return !isOneShotClient(argv) && hasRunDirArg(argv, runDir)
+	})
+}
+
+// serverPids 找出所有在跑的管理后端进程（覆盖升级后可能残留旧版本的后端，
+// 它占着端口会让新后端起不来，页面就打不开了）。
+func serverPids(bin string) []int {
+	if bin == "" {
+		return nil
+	}
+	base := filepath.Base(bin)
+	return scanProc(func(argv []string) bool {
+		return argv[0] == bin || filepath.Base(argv[0]) == base
+	})
+}
+
+// scanProc 遍历 /proc，把 argv 满足 match 的进程 pid 收集起来（不含自己）。
+func scanProc(match func(argv []string) bool) []int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil
 	}
 	self := os.Getpid()
-	base := filepath.Base(bin)
 	var pids []int
 
 	for _, e := range entries {
@@ -117,13 +139,7 @@ func daemonPids(bin, runDir string) []int {
 			continue
 		}
 		argv := splitArgv(raw)
-		if len(argv) == 0 {
-			continue
-		}
-		if argv[0] != bin && filepath.Base(argv[0]) != base {
-			continue
-		}
-		if isOneShotClient(argv) || !hasRunDirArg(argv, runDir) {
+		if len(argv) == 0 || !match(argv) {
 			continue
 		}
 		pids = append(pids, pid)

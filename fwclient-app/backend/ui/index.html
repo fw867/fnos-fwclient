@@ -107,6 +107,24 @@
       </form>
       <p class="hint" id="config-notice"></p>
     </section>
+
+    <section class="card" id="card-appupdate">
+      <div class="card-head">
+        <h2>应用更新</h2>
+        <button class="ghost" id="btn-app-check">检查更新</button>
+      </div>
+      <div class="grid">
+        <div class="kv"><span>当前应用版本</span><b id="v-app-cur">-</b></div>
+        <div class="kv"><span>GitHub 最新版本</span><b id="v-app-latest">-</b></div>
+        <div class="kv"><span>发布时间</span><b id="v-app-date">-</b></div>
+      </div>
+      <pre class="console notes" id="app-notes" hidden></pre>
+      <div class="actions">
+        <button class="primary" id="btn-app-upgrade" disabled>一键升级</button>
+        <a class="link" id="app-release-link" href="#" target="_blank" rel="noreferrer" hidden>打开发布页</a>
+      </div>
+      <p class="hint" id="app-update-notice">点「检查更新」查询 GitHub 上的最新应用包。</p>
+    </section>
   </section>
 </main>
 

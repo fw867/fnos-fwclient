@@ -24,11 +24,33 @@ fi
 echo "${TRIM_APPVER:-unknown}" > "${FWC_VAR}/installed.version" 2>/dev/null
 fwc_chown_app "${FWC_APPDEST}" "${FWC_VAR}" "${FWC_ETC}" 2>/dev/null
 
+# 覆盖升级最容易出问题的地方：旧版本进程还在跑（升级时文件正被占用，
+# 复制可能不完整甚至还是旧程序），或者旧后端占着端口导致新后端起不来，
+# 桌面入口就打不开了。这里按「停干净 → 刷新程序文件 → 启动并检查端口」三步走。
+fwc_log "停止升级前残留的服务进程"
+fwc_stop_client
+fwc_stop_backend
+
+fwc_log "刷新程序文件（应用中心复制可能因文件被占用而失败）"
+fwc_refresh_binary "${FWC_BIN}" || true
+fwc_refresh_binary "${FWC_SERVER}" || true
+
+fwc_log "检查程序文件完整性"
+if ! fwc_resolve_binaries; then
+    [ -s "${FWC_BIN}" ] || fwc_log "缺少客户端程序：${FWC_BIN}"
+    [ -s "${FWC_SERVER}" ] || fwc_log "缺少管理后台程序：${FWC_SERVER}"
+    fwc_note_layout
+    fwc_fail "升级后程序文件不完整或为空，请在应用中心重新安装应用包"
+fi
+fwc_log "程序文件就绪：客户端 $(wc -c <"${FWC_BIN}" 2>/dev/null | tr -d ' ') 字节，后端 $(wc -c <"${FWC_SERVER}" 2>/dev/null | tr -d ' ') 字节"
+
 # 升级完成后重新拉起服务
 if fwc_start_backend; then
     fwc_start_client || fwc_log "客户端未能自动连接，可在管理页面中手动启动"
 else
-    fwc_log "管理后台未能启动，请在应用中心重新启动应用"
+    fwc_log "管理后台端口未就绪，最后 20 行 backend.log："
+    tail -n 20 "${FWC_VAR}/backend.log" 2>/dev/null | while read -r line; do fwc_log "  ${line}"; done
+    fwc_fail "管理后台启动失败：端口未应答，请在应用中心重新启动应用"
 fi
 
 exit 0

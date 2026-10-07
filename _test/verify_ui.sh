@@ -103,8 +103,11 @@ config_panel = slice_between(html, 'id="panel-config"', "</main>")
 check('id="card-overview"' in status_panel, "运行状态页含「运行状态」卡片")
 check('id="card-logs"' in status_panel, "运行状态页含「运行日志」卡片")
 check('id="card-config"' in config_panel, "应用配置页含「连接配置」卡片")
+check('id="card-appupdate"' in config_panel, "应用配置页含「应用更新」卡片")
 for eid in ("in-gateway", "in-token", "in-autostart", "in-autoreconn", "in-verifytls", "btn-save"):
     check(f'id="{eid}"' in config_panel, f"连接配置元素在应用配置页：{eid}")
+for eid in ("btn-app-check", "btn-app-upgrade", "v-app-cur", "v-app-latest", "app-update-notice"):
+    check(f'id="{eid}"' in config_panel, f"应用更新元素在应用配置页：{eid}")
 
 overview = slice_between(html, 'id="card-overview"', 'id="card-logs"')
 order = [overview.find(f'id="{e}"') for e in ("btn-start", "btn-stop", "btn-restart", "btn-upgrade")]

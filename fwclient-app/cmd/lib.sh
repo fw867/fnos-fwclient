@@ -64,14 +64,25 @@ fwc_is_true() {
     esac
 }
 
-# fwc_find_file <文件名> 在应用目录与安装临时目录中查找文件，输出其路径
+# fwc_same_file <a> <b> 两个路径是否指向同一个文件
+fwc_same_file() {
+    local a b
+    a="$(readlink -f "$1" 2>/dev/null || printf '%s' "$1")"
+    b="$(readlink -f "$2" 2>/dev/null || printf '%s' "$2")"
+    [ -n "${a}" ] && [ "${a}" = "${b}" ]
+}
+
+# fwc_find_file <文件名> [排除路径] 在应用目录与安装临时目录中查找文件，输出其路径。
+# 排除路径用于「就地补齐」：避免把自己当成源文件再拷回自己。
 fwc_find_file() {
     local name="$1"
+    local exclude="${2:-}"
     local d hit
     local roots=()
+    local first="${FWC_APPDEST}/${FWC_BINDIR_REL}/${name}"
 
-    if [ -f "${FWC_APPDEST}/${FWC_BINDIR_REL}/${name}" ]; then
-        echo "${FWC_APPDEST}/${FWC_BINDIR_REL}/${name}"
+    if [ -f "${first}" ] && ! { [ -n "${exclude}" ] && fwc_same_file "${first}" "${exclude}"; }; then
+        echo "${first}"
         return 0
     fi
 
@@ -84,11 +95,14 @@ fwc_find_file() {
     for d in "${roots[@]}"; do
         [ -n "${d}" ] || continue
         [ -d "${d}" ] || continue
-        hit="$(find "${d}" -maxdepth 6 -type f -name "${name}" 2>/dev/null | head -n 1)"
-        if [ -n "${hit}" ]; then
+        for hit in $(find "${d}" -maxdepth 6 -type f -name "${name}" 2>/dev/null | head -n 5); do
+            [ -n "${hit}" ] || continue
+            if [ -n "${exclude}" ] && fwc_same_file "${hit}" "${exclude}"; then
+                continue
+            fi
             echo "${hit}"
             return 0
-        fi
+        done
     done
     return 1
 }
@@ -144,31 +158,70 @@ fwc_note_layout() {
     fi
 }
 
-# fwc_resolve_binaries 定位 fwclient 与后端程序，缺失时尝试从安装临时目录补齐。
+# fwc_repair_binary <目标文件> 目标为空或缺失时，从安装临时目录里找同名文件补上。
+# 覆盖升级过程中若「文件正在被执行」（Text file busy）会导致复制不完整，
+# 出现 0 字节或残缺的程序文件，这里统一按「缺失」处理并重新补齐。
+fwc_repair_binary() {
+    local target="$1" name src
+    name="$(basename "${target}")"
+
+    if [ -s "${target}" ]; then
+        return 0
+    fi
+    if [ -e "${target}" ]; then
+        fwc_log "${name} 为空或残缺（升级复制不完整），尝试重新补齐"
+    fi
+
+    if src="$(fwc_find_file "${name}" "${target}")"; then
+        fwc_log "从 ${src} 补齐 ${name}"
+        mkdir -p "$(dirname "${target}")" 2>/dev/null
+        if cp -f "${src}" "${target}" 2>/dev/null && [ -s "${target}" ]; then
+            chmod 755 "${target}" 2>/dev/null
+            return 0
+        fi
+        fwc_log "复制失败: ${src}（目标可能正在被占用）"
+    else
+        fwc_log "没有找到可用的 ${name} 副本，无法自动补齐"
+    fi
+    return 1
+}
+
+# fwc_refresh_binary <目标文件> 用安装临时目录里的同名文件覆盖目标（大小不同才覆盖）。
+# 覆盖升级时应用中心复制文件可能因为「文件正在被执行」（Text file busy）而失败，
+# 结果跑的还是旧程序；升级回调里做一次强制刷新，保证新包的程序真正生效。
+fwc_refresh_binary() {
+    local target="$1" name src src_size tgt_size
+    name="$(basename "${target}")"
+
+    if ! src="$(fwc_find_file "${name}" "${target}")"; then
+        return 0
+    fi
+    [ -s "${src}" ] || return 0
+
+    src_size="$(wc -c <"${src}" 2>/dev/null | tr -d ' ')"
+    tgt_size="$(wc -c <"${target}" 2>/dev/null | tr -d ' ')"
+    [ -n "${src_size}" ] || return 0
+    [ "${src_size}" = "${tgt_size}" ] && return 0
+
+    fwc_log "刷新 ${name}：${tgt_size:-0} -> ${src_size} 字节（来源 ${src}）"
+    if cp -f "${src}" "${target}" 2>/dev/null && [ -s "${target}" ]; then
+        chmod 755 "${target}" 2>/dev/null
+        return 0
+    fi
+    fwc_log "刷新 ${name} 失败（文件可能正在被占用）"
+    return 1
+}
+
+# fwc_resolve_binaries 定位 fwclient 与后端程序，缺失/残缺时尝试从安装临时目录补齐。
 # fnOS 在不同阶段提供的目录布局可能不同，这里做自适应而不是直接失败。
-# 返回 0 表示两个程序都已就位。
+# 返回 0 表示两个程序都已就位且非空。
 fwc_resolve_binaries() {
-    local src
+    fwc_repair_binary "${FWC_BIN}" || true
+    fwc_repair_binary "${FWC_SERVER}" || true
 
-    if [ ! -f "${FWC_BIN}" ]; then
-        if src="$(fwc_find_file "$(basename "${FWC_BIN}")")"; then
-            fwc_log "从 ${src} 补齐 $(basename "${FWC_BIN}")"
-            mkdir -p "${FWC_BINDIR}" 2>/dev/null
-            cp -f "${src}" "${FWC_BIN}" 2>/dev/null || fwc_log "复制失败: ${src}"
-        fi
-    fi
-
-    if [ ! -f "${FWC_SERVER}" ]; then
-        if src="$(fwc_find_file "$(basename "${FWC_SERVER}")")"; then
-            fwc_log "从 ${src} 补齐 $(basename "${FWC_SERVER}")"
-            mkdir -p "${FWC_SERVERDIR}" 2>/dev/null
-            cp -f "${src}" "${FWC_SERVER}" 2>/dev/null || fwc_log "复制失败: ${src}"
-        fi
-    fi
-
-    [ -f "${FWC_BIN}" ] && chmod 755 "${FWC_BIN}" 2>/dev/null
-    [ -f "${FWC_SERVER}" ] && chmod 755 "${FWC_SERVER}" 2>/dev/null
-    [ -f "${FWC_BIN}" ] && [ -f "${FWC_SERVER}" ]
+    [ -s "${FWC_BIN}" ] && chmod 755 "${FWC_BIN}" 2>/dev/null
+    [ -s "${FWC_SERVER}" ] && chmod 755 "${FWC_SERVER}" 2>/dev/null
+    [ -s "${FWC_BIN}" ] && [ -s "${FWC_SERVER}" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -342,6 +395,7 @@ fwc_is_client_cmdline() {
 fwc_client_pids() {
     local d pid cmd
     [ -d /proc ] || return 0
+    [ -n "${FWC_BIN}" ] || return 0
     for d in /proc/[0-9]*; do
         pid="${d#/proc/}"
         cmd="$(fwc_proc_cmdline "${pid}")" || continue
@@ -574,20 +628,49 @@ fwc_backend_pid() {
     echo "${pid}"
 }
 
+# fwc_backend_pids 列出所有在跑的本应用后端进程 pid（每行一个）。
+# 覆盖升级常常留下旧版本的后端：它占着 18443，新后端起不来，桌面入口就会
+# 一直打不开（一片空白），所以启动前要把它们清干净。
+fwc_backend_pids() {
+    local d pid cmd
+    [ -d /proc ] || return 0
+    [ -n "${FWC_SERVER}" ] || return 0
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ "${pid}" = "$$" ] && continue
+        cmd="$(fwc_proc_cmdline "${pid}")" || continue
+        case "${cmd}" in
+            *"${FWC_SERVER}" | *"${FWC_SERVER} "*) echo "${pid}" ;;
+        esac
+    done
+    return 0
+}
+
+# fwc_port_ready <端口> 端口上是否已经有服务在应答（用 /dev/tcp 探活，不依赖 curl）
+fwc_port_ready() {
+    local port="$1"
+    (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null || return 1
+    exec 3>&- 2>/dev/null || true
+    return 0
+}
+
 fwc_start_backend() {
     if [ ! -x "${FWC_SERVER}" ]; then
         fwc_log "找不到后端服务程序：${FWC_SERVER}"
         return 1
     fi
 
-    # 已在运行就直接复用，避免重复拉起（第二个进程会因端口占用而退出，
-    # 并把 pid 文件覆盖成已退出的 pid）
+    # 已在运行（且确实是本应用的后端）就直接复用
     local running
     running="$(fwc_backend_pid)"
     if [ "${running}" != "0" ]; then
         fwc_log "管理后台已在运行 pid=${running}，无需重复启动"
         return 0
     fi
+
+    # 覆盖升级最容易出问题的一步：旧版本后端可能还活着（pid 文件已失效或属主不同），
+    # 它占着端口会让新后端起不来。这里先把所有残留后端清掉再启动。
+    fwc_stop_backend
 
     mkdir -p "${FWC_VAR}" "${FWC_TMP}" "${FWC_RUNDIR}"
     fwc_chown_app "${FWC_VAR}" "${FWC_TMP}"
@@ -606,36 +689,63 @@ fwc_start_backend() {
     fi
     echo $! > "${FWC_BACKEND_PID}"
 
+    # 两点都要满足才算启动成功：进程活着 + 端口真的能应答。
+    # 只看进程会出现「pid 在、页面打不开」的假成功。
     local i=0
-    while [ $i -lt 25 ]; do
-        if [ "$(fwc_backend_pid)" != "0" ] && kill -0 "$(fwc_backend_pid)" 2>/dev/null; then
-            return 0
+    while [ $i -lt 50 ]; do
+        if [ "$(fwc_backend_pid)" != "0" ]; then
+            if fwc_port_ready "${port}"; then
+                fwc_log "管理后台就绪 pid=$(fwc_backend_pid) 端口 ${port}"
+                return 0
+            fi
         fi
         sleep 0.2
         i=$((i + 1))
     done
-    fwc_log "管理后台启动失败"
+
+    if [ "$(fwc_backend_pid)" = "0" ]; then
+        fwc_log "管理后台启动失败（进程未存活）"
+        [ -s "${FWC_VAR}/backend.out" ] && tail -n 5 "${FWC_VAR}/backend.out" | while read -r line; do fwc_log "  backend.out: ${line}"; done
+        return 1
+    fi
+    fwc_log "管理后台进程在跑，但端口 ${port} 一直没有应答，请查看 ${FWC_VAR}/backend.log"
     return 1
 }
 
 fwc_stop_backend() {
+    # 先按 pid 文件停，再兜底清理所有残留的本应用后端进程
     local pid
     pid="$(fwc_backend_pid)"
-    if [ "${pid}" = "0" ]; then
-        rm -f "${FWC_BACKEND_PID}" 2>/dev/null
-        return 0
+    if [ "${pid}" != "0" ]; then
+        kill -TERM "${pid}" 2>/dev/null
+        local i=0
+        while [ $i -lt 20 ]; do
+            kill -0 "${pid}" 2>/dev/null || break
+            sleep 0.2
+            i=$((i + 1))
+        done
+        if kill -0 "${pid}" 2>/dev/null; then
+            kill -KILL "${pid}" 2>/dev/null
+        fi
     fi
-    kill -TERM "${pid}" 2>/dev/null
+    rm -f "${FWC_BACKEND_PID}" 2>/dev/null
+
+    local stray
+    for stray in $(fwc_backend_pids); do
+        [ "${stray}" = "${pid}" ] && continue
+        fwc_log "清理残留的管理后台进程 pid=${stray}"
+        kill -TERM "${stray}" 2>/dev/null || true
+    done
     local i=0
     while [ $i -lt 20 ]; do
-        kill -0 "${pid}" 2>/dev/null || break
+        [ -z "$(fwc_backend_pids)" ] && return 0
         sleep 0.2
         i=$((i + 1))
     done
-    if kill -0 "${pid}" 2>/dev/null; then
-        kill -KILL "${pid}" 2>/dev/null
-    fi
-    rm -f "${FWC_BACKEND_PID}" 2>/dev/null
+    for stray in $(fwc_backend_pids); do
+        fwc_log "强制结束管理后台进程 pid=${stray}"
+        kill -KILL "${stray}" 2>/dev/null || true
+    done
     return 0
 }
 

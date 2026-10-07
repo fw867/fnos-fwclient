@@ -237,6 +237,19 @@ select {
 .hint.ok { color: var(--ok); }
 .hint.err { color: var(--err); }
 
+/* 应用更新：更新说明与控制台同色，但更矮，避免顶掉按钮 */
+.console.notes {
+  max-height: 220px;
+  margin-bottom: 12px;
+}
+.actions .link {
+  align-self: center;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.actions .link:hover { text-decoration: underline; }
+
 footer {
   text-align: center;
   font-size: 12px;

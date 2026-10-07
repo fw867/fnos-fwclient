@@ -29,6 +29,11 @@ func daemonPids(bin, runDir string) []int {
 	return nil
 }
 
+// serverPids 在 Windows 上不支持扫描 /proc，返回空。
+func serverPids(bin string) []int {
+	return nil
+}
+
 // lookupUser 在 Windows 上不支持降权。
 func lookupUser(name string) (int, int, error) {
 	return 0, 0, nil

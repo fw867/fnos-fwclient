@@ -171,6 +171,11 @@ type App struct {
 	// 真实客户端在部分场景下会让 pid 文件短暂消失，仅依赖 pid 文件会误判为「未运行」。
 	trackMu   sync.Mutex
 	trackedID int
+
+	// 应用自身更新：GitHub Release 查询结果缓存（避免触发 API 限流）
+	updMu    sync.Mutex
+	updCache *releaseInfo
+	updAt    time.Time
 }
 
 func NewApp(p Paths) *App {
@@ -1198,6 +1203,9 @@ func (a *App) routes() *http.ServeMux {
 	mux.HandleFunc("/api/version", a.handleVersion)
 	mux.HandleFunc("/api/upgrade", a.handleUpgrade)
 	mux.HandleFunc("/api/upgrade/status", a.handleUpgradeStatus)
+	mux.HandleFunc("/api/app/update", a.handleAppUpdate)
+	mux.HandleFunc("/api/app/download", a.handleAppDownload)
+	mux.HandleFunc("/api/app/install", a.handleAppInstall)
 	mux.HandleFunc("/api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 0, "ok", map[string]any{"app": appName, "version": appVersion})
 	})
@@ -1254,7 +1262,57 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("[后端] 监听 %s", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("[后端] 服务退出：%v", err)
+	app.serve(srv, addr)
+}
+
+// serve 监听端口；失败时退避重试，而不是直接退出。
+//
+// 覆盖升级（应用中心上传新包）时，旧版本的后端可能还没退干净、仍占着端口，
+// 新后端若立刻 fatal 退出，桌面入口就会一直打不开（一片空白）。
+// 这里遇到端口占用会先结束本应用遗留的旧后端进程，再重试绑定。
+func (a *App) serve(srv *http.Server, addr string) {
+	deadline := time.Now().Add(90 * time.Second)
+	for attempt := 1; ; attempt++ {
+		err := srv.ListenAndServe()
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return
+		}
+		log.Printf("[后端] 监听 %s 失败（第 %d 次）：%v", addr, attempt, err)
+
+		if a.killOtherServers() == 0 {
+			log.Printf("[后端] 端口仍被其它进程占用，2 秒后重试")
+		}
+		if time.Now().After(deadline) {
+			log.Fatalf("[后端] 无法监听 %s（已重试 %d 次）：%v", addr, attempt, err)
+		}
+		time.Sleep(2 * time.Second)
 	}
+}
+
+// killOtherServers 结束本应用其它正在运行的后端进程（覆盖升级留下的旧实例），
+// 返回结束掉的进程数。用于端口被自己人占用的场景。
+func (a *App) killOtherServers() int {
+	pids := serverPids(a.paths.Binary)
+	if len(pids) == 0 {
+		return 0
+	}
+	for _, pid := range pids {
+		log.Printf("[后端] 结束占用端口的旧后端进程 pid=%d", pid)
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(terminateSignal)
+		}
+	}
+	for i := 0; i < 25; i++ {
+		if len(serverPids(a.paths.Binary)) == 0 {
+			return len(pids)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	for _, pid := range serverPids(a.paths.Binary) {
+		log.Printf("[后端] 强制结束旧后端进程 pid=%d", pid)
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+	}
+	return len(pids)
 }

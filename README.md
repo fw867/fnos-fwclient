@@ -24,6 +24,7 @@
 | 实时日志 | 读取 `fwclient` 日志尾部，支持 100/300/1000/3000 行、4 秒自动刷新、清空 |
 | 版本显示 | 调用 `fwclient -v`，当前版本直接显示在状态卡片里，无需单独查询 |
 | 一键升级 | 状态卡片里的「检查并升级」调用 `fwclient -u`，进度显示在状态提示行，升级后自动刷新版本 |
+| 应用自身更新 | 「应用配置 → 应用更新」里检查 GitHub Releases 上的最新应用包，显示版本、发布时间与更新说明；有新版时可一键下载校验并尝试自动安装，权限不足时提示到应用中心手动安装 |
 | 设备标识保留 | 升级、卸载（默认）均保留 `fwclient.id`，避免服务端把设备当成新机器 |
 | 开机自启 | 应用启动时按配置自动连接；可在「应用配置」中关闭 |
 
@@ -121,6 +122,9 @@ cmd/main start  ──►  fwclient-server（管理后端，常驻，端口 1844
 | GET | `/api/version?refresh=1` | 查询版本（可强制刷新） |
 | POST | `/api/upgrade` | 触发 `fwclient -u` |
 | GET | `/api/upgrade/status` | 升级进度与输出 |
+| GET | `/api/app/update?refresh=1` | 查询 GitHub 上的最新应用包版本、更新说明与产物信息 |
+| POST | `/api/app/download` | 下载最新 `.fpk` 到 `TRIM_PKGVAR/update/` 并按 Release 的 SHA256SUMS 校验 |
+| POST | `/api/app/install` | 对已下载的包执行 `appcenter-cli install-fpk`（不接受路径参数，只装自己下载的那个） |
 | GET | `/api/healthz` | 健康检查 |
 
 > 接口兼容 `insecure` 字段：请求里给 `verifyTls` 会换算成 `insecure = !verifyTls`。
@@ -174,9 +178,10 @@ bash _test/verify_uninstall.sh  # 卸载时保留/删除设备标识两条分支
 bash _test/verify_fixes.sh      # 安装前检查不阻断安装 + TLS 校验默认值语义
 bash _test/verify_duplicate_start.sh  # 启动只会有一个客户端进程、重复进程自动收敛、手动停止标记
 bash _test/verify_ui.sh         # 管理页 tab 结构、按钮顺序、已移除的卡片、前端元素引用
+bash _test/verify_upgrade.sh    # 覆盖升级后页面仍可打开（含旧后端残留、二进制残缺两种故障）
 ```
 
-已在 WSL Ubuntu 中验证结果（合计 118 项全过）：
+已在 WSL Ubuntu 中验证结果（合计 136 项全过）：
 
 ```
 verify_linux            PASS=17 FAIL=0
@@ -185,7 +190,8 @@ verify_restart          PASS=11 FAIL=0
 verify_uninstall        PASS=7  FAIL=0
 verify_fixes            PASS=28 FAIL=0
 verify_duplicate_start  PASS=22 FAIL=0
-verify_ui               PASS=23 FAIL=0
+verify_ui               PASS=29 FAIL=0
+verify_upgrade          PASS=12 FAIL=0
 ```
 
 > 说明：以上验证在 WSL 下以当前用户身份运行，未覆盖 fnOS 的
@@ -194,8 +200,18 @@ verify_ui               PASS=23 FAIL=0
 ## 7. 已知行为与注意事项
 
 - **首次连接**：安装后如未填配置，应用仍会启动管理页，填好网关域名与令牌保存即自动连接。
+- **覆盖升级后一定能打开页面**：应用中心上传新包升级时，旧版本进程可能还活着
+  （文件正被执行会让复制失败）、或旧后端占着 18443 不放，这两种情况以前会让页面
+  一直空白。现在升级回调按「停干净 → 刷新程序文件 → 启动并确认端口应答」三步走：
+  先清理残留的客户端与后端进程，再用安装临时目录里的新文件刷新
+  `bin/fwclient`、`server/fwclient-server`（大小不一致就覆盖），最后等端口真的应答才返回；
+  后端自己也会在端口被旧实例占用时结束它并退避重试（最多 90 秒），不再直接退出。
+- **应用内升级的边界**：应用以包用户运行、没有 root，所以「一键升级」是
+  「下载 + 校验 + 尝试 `appcenter-cli install-fpk`」；系统里没有该命令或权限不足时，
+  会明确提示到应用中心手动安装已下载的包（路径会显示出来）。
+  安装包只从本仓库 Release 取，且只安装自己下载的那一个，不接受外部路径。
 - **页面分两个 tab**：「运行状态」放状态卡片（启动 / 规范关闭 / 重启 / 检查并升级）与运行日志，
-  「应用配置」放连接配置表单；升级进度显示在状态卡片的提示行里，不再单开输出窗口。
+  「应用配置」放连接配置与应用更新；升级进度显示在状态卡片的提示行里，不再单开输出窗口。
 - **手动停止后不会被拉起**：点「规范关闭」后客户端保持停止，看护线程不会在 30 秒后自动重连；
   顶部状态会显示「已手动停止」，点「启动」或保存配置即可恢复。
   如果点了停止却还看到客户端在跑，多半是 1.0.3 之前版本留下的重复实例
@@ -246,6 +262,20 @@ tail -n 50 /var/apps/fwclient/var/lifecycle.log 2>/dev/null
 ```bash
 ps -eo pid,ppid,args | grep -E 'app/(bin|server)/fwclient' | grep -v grep
 cat /var/apps/fwclient/var/run/fwclient.pid
+```
+
+覆盖升级后页面打不开（空白）时，按这个顺序看：
+
+```bash
+# 1. 端口有没有人应答（没有 = 页面空白）
+ss -lnt 2>/dev/null | grep 18443
+# 2. 后端进程在不在、是不是新版本
+ps -eo pid,args | grep 'server/fwclient-server' | grep -v grep
+# 3. 升级回调写了什么（会记录清理了哪些残留进程、程序文件是否被刷新）
+tail -n 40 /var/apps/fwclient/var/lifecycle.log
+# 4. 后端自己的日志与标准输出
+tail -n 40 /var/apps/fwclient/var/backend.log
+tail -n 20 /var/apps/fwclient/var/backend.out
 ```
 
 ## 9. 自动构建与发布（GitHub Actions）
