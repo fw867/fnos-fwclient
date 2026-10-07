@@ -89,6 +89,44 @@ main {
   gap: 16px;
 }
 
+/* 顶部 tab：运行状态 / 应用配置 */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.tab {
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  padding: 7px 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tab:hover:not(.active) { color: var(--text); }
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.tab.active:hover { filter: brightness(.96); }
+
+/* 一个 panel 就是一页；未选中的整页隐藏 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.panel[hidden] { display: none; }
+
 .card {
   background: var(--card);
   border: 1px solid var(--border);

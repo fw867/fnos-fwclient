@@ -17,6 +17,9 @@ config/*    text eol=lf
 *.md        text eol=lf
 *.py        text eol=lf
 *.json      text eol=lf
+*.mod       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
 
 # 二进制不要做换行或文本转换
 *.fpk       binary

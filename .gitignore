@@ -4,6 +4,11 @@ _tools/
 __pycache__/
 *.pyc
 
+# 构建产物：包只挂在 GitHub Release 上，不再入库
+dist/
+# 页面预览图（本地截图，属临时产物）
+_preview/
+
 # 本机联调环境（Windows 模拟 fwclient 与临时目录，不随仓库分发）
 _test/env/
 _test/ui.png

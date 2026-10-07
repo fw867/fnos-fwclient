@@ -1,0 +1,204 @@
+name: 构建与发布
+
+# 是否需要构建/发布，完全由提交信息决定（见 jobs.release.if）：
+#   提交信息里带 [release]   → 构建 + 验证 + 自动累加版本号 + 发 GitHub Release
+#   PR 标题里带 [release]    → 只构建 + 验证（合并前预检，不发布、不打标签）
+#   手动触发（workflow_dispatch）→ 同样走构建 + 发布，可用 dry_run 只验证
+#
+# 发版流程：改完代码后正常提交，提交信息里写上 [release] 和更新说明，push 即可：
+#   git commit -m "feat: xxx [release]" -m "- 条目一；- 条目二"
+#   git push origin master
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 本次更新说明（留空则用最近一次提交的标题）
+        type: string
+        required: false
+      dry_run:
+        description: 只构建验证，不累加版本号、不打标签、不发布
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 构建并按需发布
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[release]'))
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go（版本取自 backend/go.mod）
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: fwclient-app/backend/go.mod
+          cache: false
+
+      - name: 准备更新说明
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          INPUT_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          # 统一写进文件，避免把提交信息直接插进 shell 命令（注入风险）
+          if [ -n "${INPUT_NOTES}" ]; then
+            printf '%s\n' "${INPUT_NOTES}" > notes.txt
+          elif [ -n "${COMMIT_MESSAGE}" ]; then
+            printf '%s\n' "${COMMIT_MESSAGE}" > notes.txt
+          elif [ -n "${PR_TITLE}" ]; then
+            printf '%s\n' "${PR_TITLE}" > notes.txt
+          else
+            git log -1 --pretty=%B > notes.txt
+          fi
+          echo "--- notes.txt ---"
+          cat notes.txt
+
+      - name: 自动累加版本号并写入 changelog
+        id: ver
+        if: "${{ github.event_name != 'pull_request' && inputs.dry_run != true }}"
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/bump_version.py \
+            --manifest fwclient-app/manifest \
+            --main-go fwclient-app/backend/main.go \
+            --notes-file notes.txt \
+            --keep 6 \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: 解析当前版本（PR / dry_run 用）
+        id: cur
+        if: "${{ github.event_name == 'pull_request' || inputs.dry_run == true }}"
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' fwclient-app/manifest | head -n 1 | tr -d '[:space:]')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "本次只验证，当前 manifest 版本：$version"
+
+      - name: 构建应用包
+        env:
+          VERSION: ${{ steps.ver.outputs.version || steps.cur.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash build.sh
+          ls -l "dist/fwclient-${VERSION}.fpk"
+
+      - name: 运行验证脚本
+        run: |
+          set -uo pipefail
+          if ! compgen -G "_test/verify_*.sh" >/dev/null; then
+            echo "没有验证脚本，跳过"
+            exit 0
+          fi
+          fail=0
+          for t in _test/verify_*.sh; do
+            echo "::group::$(basename "$t")"
+            if bash "$t"; then
+              echo "::notice::$(basename "$t") 通过"
+            else
+              echo "::error::$(basename "$t") 失败"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$fail"
+
+      - name: 生成校验和
+        env:
+          VERSION: ${{ steps.ver.outputs.version || steps.cur.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum "./fwclient-${VERSION}.fpk" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpk-${{ steps.ver.outputs.version || steps.cur.outputs.version }}
+          path: |
+            dist/fwclient-${{ steps.ver.outputs.version || steps.cur.outputs.version }}.fpk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: 生成 Release 说明
+        if: "${{ github.event_name != 'pull_request' && inputs.dry_run != true }}"
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release_notes.py fwclient-app/manifest "$VERSION" > release-notes.md
+          head -n 20 release-notes.md
+
+      - name: 提交版本号并推送
+        if: "${{ github.event_name != 'pull_request' && inputs.dry_run != true }}"
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fwclient-app/manifest fwclient-app/backend/main.go
+          if git diff --cached --quiet; then
+            echo "版本号没有变化，跳过提交"
+          else
+            git commit -m "chore: 自动发布 v${VERSION} [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: 打标签并创建 Release
+        if: "${{ github.event_name != 'pull_request' && inputs.dry_run != true }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          PREVIOUS: ${{ steps.ver.outputs.previous }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          asset="dist/fwclient-${VERSION}.fpk"
+
+          if git ls-remote --tags origin "refs/tags/${tag}" | grep -q "${tag}"; then
+            echo "标签 ${tag} 已存在，直接复用"
+          else
+            git tag "${tag}"
+            git push origin "${tag}"
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
+            gh release edit "$tag" --title "内网穿透 ${tag}" --notes-file release-notes.md
+          else
+            gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
+              --title "内网穿透 ${tag}" --notes-file release-notes.md
+          fi
+
+          echo "已发布 $tag（${PREVIOUS} -> ${VERSION}）"
+          gh release view "$tag" --json url -q .url
+
+      - name: 汇总
+        if: always()
+        env:
+          VERSION: ${{ steps.ver.outputs.version || steps.cur.outputs.version }}
+        run: |
+          {
+            echo "### 内网穿透 ${VERSION}"
+            echo ""
+            echo "- 事件：${{ github.event_name }}"
+            echo "- 结果：${{ job.status }}"
+            echo "- 产物：\`dist/fwclient-${VERSION}.fpk\`"
+          } >> "$GITHUB_STEP_SUMMARY"

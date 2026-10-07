@@ -5,6 +5,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var followTimer = null;
   var upgradeTimer = null;
+  var TAB_KEY = 'fwclient.tab';
 
   function api(path, opts) {
     opts = opts || {};
@@ -19,15 +20,48 @@
     });
   }
 
-  function notice(msg, kind) {
-    var el = $('notice');
+  function noticeAt(id, msg, kind) {
+    var el = $(id);
+    if (!el) { return; }
     el.textContent = msg || '';
     el.className = 'hint' + (kind ? ' ' + kind : '');
   }
 
+  function notice(msg, kind) { noticeAt('notice', msg, kind); }
+
+  /* 连接配置在「应用配置」页，提示要写在该页自己的位置上 */
+  function configNotice(msg, kind) { noticeAt('config-notice', msg, kind); }
+
   function setBusy(btn, busy) {
     if (!btn) { return; }
     btn.disabled = busy;
+  }
+
+  /* ---------------- Tab 切换 ---------------- */
+
+  function selectTab(panelId) {
+    var tabs = document.querySelectorAll('.tab');
+    var i;
+    for (i = 0; i < tabs.length; i++) {
+      tabs[i].classList.toggle('active', tabs[i].getAttribute('data-panel') === panelId);
+    }
+    var panels = document.querySelectorAll('.panel');
+    for (i = 0; i < panels.length; i++) {
+      panels[i].hidden = panels[i].id !== panelId;
+    }
+    try { localStorage.setItem(TAB_KEY, panelId); } catch (e) { /* 隐私模式下忽略 */ }
+  }
+
+  function initTabs() {
+    var tabs = document.querySelectorAll('.tab');
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener('click', function () {
+        selectTab(this.getAttribute('data-panel'));
+      });
+    }
+    var saved = null;
+    try { saved = localStorage.getItem(TAB_KEY); } catch (e) { saved = null; }
+    if (saved && document.getElementById(saved)) { selectTab(saved); }
   }
 
   /* ---------------- 状态 ---------------- */
@@ -51,7 +85,7 @@
       dot.className = 'dot ' + (d.running ? 'on' : 'off');
       $('pill-text').textContent = d.running
         ? '运行中 · PID ' + d.pid
-        : '未运行';
+        : (d.stoppedByUser ? '已手动停止' : '未运行');
 
       $('btn-start').disabled = d.running;
       $('btn-stop').disabled = !d.running;
@@ -65,7 +99,11 @@
       $('in-autoreconn').checked = !!d.autoReconn;
       $('in-verifytls').checked = !d.insecure;
 
-      if (d.lastError) { notice(d.lastError, 'err'); }
+      if (d.lastError) {
+        notice(d.lastError, 'err');
+      } else if (!d.running && d.stoppedByUser) {
+        notice('客户端已手动停止，不会被自动重连拉起；点「启动」恢复。', '');
+      }
       return d;
     }).catch(function (e) {
       notice('读取状态失败：' + e.message, 'err');
@@ -98,15 +136,15 @@
       autoStart: $('in-autostart').checked,
       autoReconn: $('in-autoreconn').checked
     };
-    if (!body.gateway) { notice('请填写网关域名', 'err'); return; }
+    if (!body.gateway) { configNotice('请填写网关域名', 'err'); return; }
     setBusy($('btn-save'), true);
-    notice('正在保存…');
+    configNotice('正在保存…');
     api('/api/config', { method: 'POST', body: body }).then(function (res) {
-      notice(res.msg, res.code === 0 ? 'ok' : 'err');
+      configNotice(res.msg, res.code === 0 ? 'ok' : 'err');
       if (res.code === 0) { $('in-token').value = ''; }
       return refreshStatus();
     }).catch(function (e) {
-      notice('保存失败：' + e.message, 'err');
+      configNotice('保存失败：' + e.message, 'err');
     }).then(function () { setBusy($('btn-save'), false); });
   }
 
@@ -139,15 +177,17 @@
     api('/api/upgrade/status').then(function (res) {
       if (res.code !== 0) { return; }
       var d = res.data;
-      $('upgrade-out').textContent = (d.output && d.output.length)
-        ? d.output.join('\n') : '（暂无升级输出）';
-      $('upgrade-out').scrollTop = $('upgrade-out').scrollHeight;
+      if (d.output && d.output.length) {
+        // 升级过程不再单开输出窗口，把最后一行进度显示在状态提示里
+        notice('升级中：' + d.output[d.output.length - 1]);
+      }
       if (d.running) {
         setBusy($('btn-upgrade'), true);
       } else {
         setBusy($('btn-upgrade'), false);
         if (upgradeTimer) { clearInterval(upgradeTimer); upgradeTimer = null; }
         $('v-version').textContent = d.version || $('v-version').textContent;
+        notice('升级流程结束，当前版本 ' + (d.version || '未知'), 'ok');
         refreshStatus();
       }
     });
@@ -188,19 +228,6 @@
     });
     $('config-form').addEventListener('submit', saveConfig);
 
-    $('btn-check-version').addEventListener('click', function () {
-      var btn = $('btn-check-version');
-      setBusy(btn, true);
-      api('/api/version?refresh=1').then(function (res) {
-        if (res.code === 0) {
-          $('v-version').textContent = res.data.fwVersion;
-          notice('当前版本：' + res.data.fwVersion, 'ok');
-        }
-      }).catch(function (e) {
-        notice('查询失败：' + e.message, 'err');
-      }).then(function () { setBusy(btn, false); });
-    });
-
     $('btn-upgrade').addEventListener('click', startUpgrade);
 
     $('btn-logs-refresh').addEventListener('click', refreshLogs);
@@ -227,6 +254,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+    initTabs();
     bind();
     refreshStatus();
     refreshLogs();

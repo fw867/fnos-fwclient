@@ -2,7 +2,9 @@
 # 卸载流程验证：保留/清理设备标识两种分支
 set -uo pipefail
 
-FPK="/mnt/d/软件开发/fnos/dist/fwclient-1.0.2.fpk"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FPK="${FPK:-$(ls -1t "$REPO"/dist/*.fpk 2>/dev/null | head -n 1)}"
+[ -f "$FPK" ] || { echo "找不到 .fpk，请先执行 ./build.sh"; exit 1; }
 WORK="$(mktemp -d /tmp/fwc-uninst-XXXXXX)"
 mkdir -p "$WORK/pkg" "$WORK/pkg/app"
 tar -xzf "$FPK" -C "$WORK/pkg"

@@ -5,7 +5,8 @@
 # 用法: bash _test/verify_linux.sh
 set -uo pipefail
 
-APP="/mnt/d/软件开发/fnos/fwclient-app"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP="${REPO}/fwclient-app"
 WORK="$(mktemp -d /tmp/fwc-verify-XXXXXX)"
 PASS=0
 FAIL=0
@@ -15,9 +16,14 @@ no() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); }
 check() { if [ "$1" = "1" ]; then ok "$2"; else no "$2"; fi; }
 
 echo "== 1) fwclient 二进制 =="
-BIN="$APP/app/bin/fwclient"
-[ -x "$BIN" ] && ok "可执行位正确" || no "缺少可执行位"
-file -b "$BIN" 2>/dev/null | sed 's/^/  file: /'
+SRC_BIN="$APP/app/bin/fwclient"
+[ -x "$SRC_BIN" ] && ok "可执行位正确" || no "缺少可执行位"
+file -b "$SRC_BIN" 2>/dev/null | sed 's/^/  file: /'
+
+# 客户端启动时会自检并升级（原地替换自己的二进制），因此测试用副本，
+# 避免把仓库里的 app/bin/fwclient 覆盖成新版本
+BIN="$WORK/fwclient"
+cp -f "$SRC_BIN" "$BIN" && chmod +x "$BIN"
 
 VER="$("$BIN" -v 2>&1 | head -n 1)"
 echo "  -v => $VER"
@@ -109,7 +115,7 @@ check "$([ "$CSS" = "200" ] && echo 1 || echo 0)" "静态资源 style.css 返回
 STATUS="$(api "http://127.0.0.1:18123/api/status")"
 echo "  status => $(echo "$STATUS" | head -c 400)"
 case "$STATUS" in
-*'"fwVersion":"fwclient v1.3.90'*) ok "版本号读取正确" ;;
+*'"fwVersion":"fwclient v'*) ok "版本号读取正确" ;;
 *) no "版本号读取异常" ;;
 esac
 case "$STATUS" in

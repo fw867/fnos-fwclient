@@ -34,7 +34,8 @@ import (
 const (
 	appName    = "fwclient"
 	appDisplay = "内网穿透"
-	appVersion = "1.0.0"
+	// appVersion 是管理后端自身的版本，需与 fwclient-app/manifest 的 version 保持一致
+	appVersion = "1.0.3"
 )
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,8 @@ type Paths struct {
 	IDFile   string // fwclient 设备标识
 	Config   string // 应用配置 json
 	Binary   string // fwclient 二进制
+	LockFile string // 启动互斥锁（与 cmd/lib.sh 共用）
+	StopFlag string // 用户手动停止的标记（看护线程据此不再自动重连）
 	RunUser  string // 以哪个用户运行 fwclient（root 生命周期脚本降权用）
 	HomePage string
 }
@@ -76,17 +79,19 @@ func resolvePaths() Paths {
 	runDir := env("FWCLIENT_RUNDIR", filepath.Join(pkgVar, "run"))
 
 	p := Paths{
-		AppDest: appDest,
-		PkgEtc:  pkgEtc,
-		PkgVar:  pkgVar,
-		PkgTmp:  pkgTmp,
-		RunDir:  runDir,
-		LogFile: env("FWCLIENT_LOGFILE", filepath.Join(runDir, "fwclient.log")),
-		PidFile: env("FWCLIENT_PIDFILE", filepath.Join(runDir, "fwclient.pid")),
-		IDFile:  env("FWCLIENT_IDFILE", filepath.Join(runDir, "fwclient.id")),
-		Config:  env("FWCLIENT_CONFIG", filepath.Join(pkgEtc, "config.json")),
-		Binary:  env("FWCLIENT_BIN", ""),
-		RunUser: strings.TrimSpace(os.Getenv("FWCLIENT_RUN_USER")),
+		AppDest:  appDest,
+		PkgEtc:   pkgEtc,
+		PkgVar:   pkgVar,
+		PkgTmp:   pkgTmp,
+		RunDir:   runDir,
+		LogFile:  env("FWCLIENT_LOGFILE", filepath.Join(runDir, "fwclient.log")),
+		PidFile:  env("FWCLIENT_PIDFILE", filepath.Join(runDir, "fwclient.pid")),
+		IDFile:   env("FWCLIENT_IDFILE", filepath.Join(runDir, "fwclient.id")),
+		Config:   env("FWCLIENT_CONFIG", filepath.Join(pkgEtc, "config.json")),
+		Binary:   env("FWCLIENT_BIN", ""),
+		LockFile: env("FWCLIENT_LOCKFILE", filepath.Join(pkgVar, "fwclient.lock")),
+		StopFlag: env("FWCLIENT_STOPFLAG", filepath.Join(pkgVar, "client.stopped")),
+		RunUser:  strings.TrimSpace(os.Getenv("FWCLIENT_RUN_USER")),
 	}
 	if p.Binary == "" {
 		name := "fwclient"
@@ -285,16 +290,78 @@ func (a *App) setTrackedPid(pid int) {
 	a.trackMu.Unlock()
 }
 
+// runningPid 返回当前客户端的 pid；0 表示没有运行。
+//
+// 先信 pid 文件（并保留 tracked pid 兜底），再用 /proc 扫一遍：
+// 客户端从拉起（-d）到写出 pid 文件有几十毫秒的窗口，这段时间只看 pid 文件
+// 会把「已经拉起」误判成「未运行」，从而重复拉起第二个守护进程。
+func (a *App) runningPid() int {
+	if pid, ok := a.daemonRunning(); ok {
+		return pid
+	}
+	if pids := a.daemonPids(); len(pids) > 0 {
+		return pids[0]
+	}
+	return 0
+}
+
+// --- 手动停止标记 -----------------------------------------------------------
+// 用户点了「规范关闭」之后，客户端不应该被看护线程在 30 秒后又拉起来。
+// 这里用一个标记文件记录「用户主动停止」，看护线程读到它就跳过自动重连；
+// 任何一次成功启动（页面启动/重启/保存配置/应用启动）都会清掉它。
+// 标记文件与 cmd/lib.sh 的 FWC_STOPFLAG 指向同一个路径。
+
+func (a *App) markStopped() {
+	if a.paths.StopFlag == "" {
+		return
+	}
+	_ = os.WriteFile(a.paths.StopFlag, []byte(time.Now().Format(time.RFC3339)+"\n"), 0o644)
+}
+
+func (a *App) clearStopped() {
+	if a.paths.StopFlag == "" {
+		return
+	}
+	_ = os.Remove(a.paths.StopFlag)
+}
+
+func (a *App) stoppedByUser() bool {
+	if a.paths.StopFlag == "" {
+		return false
+	}
+	_, err := os.Stat(a.paths.StopFlag)
+	return err == nil
+}
+
 // fwclientArgs 组装启动参数。
 func (a *App) fwclientArgs(cfg Config) []string {
-	return []string{
+	args := []string{
 		"-s", cfg.Gateway,
 		"-t", cfg.Token,
 		"-dir", a.paths.RunDir,
 	}
+	// insecure 必须显式传给客户端，否则「校验 TLS 证书」开关对自启动/页面启动无效
+	// （只有 cmd/main start 的脚本路径会带，两边行为必须一致）
+	if cfg.Insecure {
+		args = append(args, "-insecure")
+	}
+	return args
 }
 
-// spawn 以守护进程方式拉起 fwclient。
+// lockStart 获取跨进程启动互斥锁，与 cmd/lib.sh 的 flock 使用同一个锁文件。
+// 脚本与管理后端都要做「判断未运行 → 拉起客户端」，没有这把锁就会各拉起一个
+// 守护进程（pid 文件只记录后写入的那个，另一个成为无法停止的孤儿）。
+// 加锁失败不阻断启动：只记录日志并返回空锁，退回原行为。
+func (a *App) lockStart() *startLock {
+	lk, err := acquireStartLock(a.paths.LockFile, 60*time.Second)
+	if err != nil {
+		log.Printf("[启动锁] 加锁失败（继续执行）：%v", err)
+		return nil
+	}
+	return lk
+}
+
+// spawn 以守护进程方式拉起 fwclient（调用方需确保互斥）。
 func (a *App) spawn() error {
 	a.opsMu.Lock()
 	defer a.opsMu.Unlock()
@@ -302,12 +369,26 @@ func (a *App) spawn() error {
 }
 
 // startSerialized 串行化的「未运行则启动」。
+// 先锁进程内的 opsMu，再锁进程间的锁文件，最后二次确认客户端确实没在运行。
 func (a *App) startSerialized() error {
 	a.opsMu.Lock()
 	defer a.opsMu.Unlock()
-	if _, running := a.daemonRunning(); running {
+
+	if pid := a.runningPid(); pid != 0 {
+		// 已经在运行：顺手收敛 pid 文件之外的重复进程
+		a.reapStrayDaemons(pid)
 		return nil
 	}
+
+	lk := a.lockStart()
+	defer lk.release()
+
+	// 拿到锁后重新判断：cmd/ 脚本可能刚刚把客户端拉起
+	if pid := a.runningPid(); pid != 0 {
+		a.reapStrayDaemons(pid)
+		return nil
+	}
+	a.reapStrayDaemons(0)
 	return a.spawnLocked()
 }
 
@@ -346,9 +427,11 @@ func (a *App) spawnLocked() error {
 
 	// 等待 pid 文件出现，最多 10 秒
 	for i := 0; i < 50; i++ {
-		if pid, ok := a.daemonRunning(); ok {
+		if pid := a.runningPid(); pid != 0 {
 			a.setTrackedPid(pid)
 			a.clearError()
+			// 已经跑起来了：清掉「用户主动停止」标记，看护线程恢复自动重连
+			a.clearStopped()
 			log.Printf("[启动] fwclient 已运行 pid=%d", pid)
 			return nil
 		}
@@ -367,7 +450,19 @@ func (a *App) stop() error {
 // errUngracefulStop 表示进程已结束，但没能走 fwclient 的规范关闭流程。
 var errUngracefulStop = errors.New("ungraceful stop")
 
+// stopLocked 关闭客户端，标记「用户主动停止」，并回收 pid 文件之外的重复/残留进程。
 func (a *App) stopLocked() error {
+	err := a.stopDaemonLocked()
+	// 历史遗留的重复进程（pid 文件里没有记录的那些）在这里一并清掉，
+	// 否则它们既不会被停止，也不会被状态接口看到——「点了停止却还在跑」
+	// 通常就是它们（旧版本的重复实例）。
+	a.reapStrayDaemons(0)
+	// 记下这是用户的主动停止：看护线程不得在 30 秒后自动拉起
+	a.markStopped()
+	return err
+}
+
+func (a *App) stopDaemonLocked() error {
 	pid := a.pid()
 	pidFileRaw := ""
 	if raw, err := os.ReadFile(a.paths.PidFile); err == nil {
@@ -376,8 +471,11 @@ func (a *App) stopLocked() error {
 		pidFileRaw = "<" + err.Error() + ">"
 	}
 	if pid == 0 {
-		// pid 文件缺失：回退到本进程跟踪的 pid
+		// pid 文件缺失：回退到本进程跟踪的 pid，再退回 /proc 扫描结果
 		pid = a.trackedPid()
+	}
+	if pid == 0 {
+		pid = a.runningPid()
 	}
 	if pid == 0 || !processAlive(pid) {
 		log.Printf("[停止] 没有正在运行的 fwclient (pidFile=%q tracked=%d)", pidFileRaw, a.trackedPid())
@@ -452,10 +550,59 @@ func (a *App) cleanupAfterStop() {
 	a.setTrackedPid(0)
 }
 
+// daemonPids 返回当前所有属于本应用的 fwclient 守护进程 pid
+// （含 pid 文件里记录的那个，以及历史遗留的重复进程）。
+func (a *App) daemonPids() []int {
+	return daemonPids(a.paths.Binary, a.paths.RunDir)
+}
+
+// reapStrayDaemons 结束除 keep 之外的本应用客户端进程。
+// keep 传 0 表示全部结束。用于停止流程、以及启动时自愈历史重复进程。
+func (a *App) reapStrayDaemons(keep int) {
+	strays := func() []int {
+		var left []int
+		for _, pid := range a.daemonPids() {
+			if pid != keep {
+				left = append(left, pid)
+			}
+		}
+		return left
+	}
+
+	left := strays()
+	if len(left) == 0 {
+		return
+	}
+	for _, pid := range left {
+		log.Printf("[清理] 结束重复/残留的 fwclient 进程 pid=%d（保留 %d）", pid, keep)
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(terminateSignal)
+		}
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(strays()) == 0 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	for _, pid := range strays() {
+		log.Printf("[清理] 强制结束 fwclient 进程 pid=%d", pid)
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+	}
+}
+
 // restart 先关闭再拉起。
 func (a *App) restart() error {
 	a.opsMu.Lock()
 	defer a.opsMu.Unlock()
+
+	lk := a.lockStart()
+	defer lk.release()
+
 	// 非规范关闭不算失败：进程已经结束，可以继续拉起
 	if err := a.stopLocked(); err != nil && !errors.Is(err, errUngracefulStop) {
 		return err
@@ -678,7 +825,12 @@ func (a *App) watchdog() {
 		if busy {
 			continue
 		}
-		if _, ok := a.daemonRunning(); ok {
+		// 用户刚点过「规范关闭」：不要自动拉起，等用户自己点「启动」
+		if a.stoppedByUser() {
+			missed = 0
+			continue
+		}
+		if a.runningPid() != 0 {
 			missed = 0
 			continue
 		}
@@ -693,7 +845,7 @@ func (a *App) watchdog() {
 
 // watchdogTickLocked 在持有 opsMu 的前提下做一次看护判断，返回更新后的连续未运行次数。
 func (a *App) watchdogTickLocked(missed int) int {
-	if _, stillRunning := a.daemonRunning(); stillRunning {
+	if a.runningPid() != 0 {
 		return 0
 	}
 	missed++
@@ -701,7 +853,16 @@ func (a *App) watchdogTickLocked(missed int) int {
 	if missed < 3 { // 连续 3 次（约 30 秒）未运行才重连，避免启动期误判
 		return missed
 	}
+
+	// 调用方已持有 opsMu，这里只需再拿跨进程锁；拿到后重新确认一次状态
+	lk := a.lockStart()
+	defer lk.release()
+	if pid := a.runningPid(); pid != 0 {
+		a.reapStrayDaemons(pid)
+		return 0
+	}
 	log.Printf("[看护] 尝试自动重连")
+	a.reapStrayDaemons(0)
 	if err := a.spawnLocked(); err != nil {
 		log.Printf("[看护] 自动重连失败：%v", err)
 	}
@@ -725,6 +886,7 @@ type statusResp struct {
 	Insecure    bool     `json:"insecure"`
 	AutoStart   bool     `json:"autoStart"`
 	AutoReconn  bool     `json:"autoReconn"`
+	Stopped     bool     `json:"stoppedByUser"`
 	DeviceID    string   `json:"deviceId"`
 	LogFile     string   `json:"logFile"`
 	LogSize     int64    `json:"logSize"`
@@ -753,7 +915,8 @@ func (a *App) readDeviceID() string {
 
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := a.loadConfig()
-	pid, running := a.daemonRunning()
+	pid := a.runningPid()
+	running := pid != 0
 	_, logSize, _ := a.tailLog(0)
 
 	paths := []string{}
@@ -776,6 +939,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Insecure:    cfg.Insecure,
 		AutoStart:   cfg.AutoStart,
 		AutoReconn:  cfg.AutoReconn,
+		Stopped:     a.stoppedByUser(),
 		DeviceID:    a.readDeviceID(),
 		LogFile:     a.paths.LogFile,
 		LogSize:     logSize,
@@ -853,28 +1017,36 @@ func (a *App) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := "配置已保存"
-	if restartNeeded && cfg.Gateway != "" && cfg.Token != "" {
-		if _, running := a.daemonRunning(); running {
-			if err := a.restart(); err != nil {
-				a.setUpgradeError(err.Error())
-				writeJSON(w, 2, "配置已保存，但重连失败："+err.Error(), nil)
-				return
-			}
-			msg = "配置已保存，客户端已使用新配置重连"
-		} else if cfg.AutoStart {
-			// 客户端此前未运行：保存即尝试连接，省去用户再点一次启动
-			if err := a.spawn(); err != nil {
-				log.Printf("[配置] 保存后自动连接失败：%v", err)
-			} else {
-				msg = "配置已保存，客户端已启动"
-			}
+	running := a.runningPid() != 0
+	valid := validateGateway(cfg.Gateway) == nil && validateToken(cfg.Token) == nil
+	switch {
+	case !valid:
+		// 配置还不完整，不动客户端
+	case running && restartNeeded:
+		if err := a.restart(); err != nil {
+			a.setUpgradeError(err.Error())
+			writeJSON(w, 2, "配置已保存，但重连失败："+err.Error(), nil)
+			return
+		}
+		msg = "配置已保存，客户端已使用新配置重连"
+	case !running && cfg.AutoStart:
+		// 客户端此前未运行：保存即尝试连接，省去用户再点一次启动；
+		// 成功启动会清掉「手动停止」标记，看护线程恢复自动重连
+		if err := a.startSerialized(); err != nil {
+			log.Printf("[配置] 保存后自动连接失败：%v", err)
+		} else {
+			msg = "配置已保存，客户端已启动"
 		}
 	}
 	writeJSON(w, 0, msg, nil)
 }
 
 func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
-	if _, running := a.daemonRunning(); running {
+	if pid := a.runningPid(); pid != 0 {
+		// 已经在运行：顺手收敛 pid 文件之外的重复进程，避免它们一直残留下去
+		a.opsMu.Lock()
+		a.reapStrayDaemons(pid)
+		a.opsMu.Unlock()
 		writeJSON(w, 0, "客户端已在运行", nil)
 		return
 	}
@@ -887,7 +1059,7 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 1, "请先配置访问令牌", nil)
 		return
 	}
-	if err := a.spawn(); err != nil {
+	if err := a.startSerialized(); err != nil {
 		a.setUpgradeError(err.Error())
 		writeJSON(w, 1, err.Error(), nil)
 		return
@@ -956,7 +1128,7 @@ func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	cfg := a.loadConfig()
-	if _, running := a.daemonRunning(); running && !cfg.AutoReconn {
+	if a.runningPid() != 0 && !cfg.AutoReconn {
 		// 升级不强制要求停止，fwclient 自身支持热替换后重启
 		log.Printf("[升级] 客户端正在运行，升级完成后将自动加载新版本")
 	}
@@ -1068,11 +1240,9 @@ func main() {
 
 	// 应用启动时按配置自动连接
 	if cfg.AutoStart && cfg.Gateway != "" && cfg.Token != "" {
-		if _, running := app.daemonRunning(); !running {
-			if err := app.spawn(); err != nil {
-				log.Printf("[后端] 自动连接失败：%v", err)
-				app.setUpgradeError(err.Error())
-			}
+		if err := app.startSerialized(); err != nil {
+			log.Printf("[后端] 自动连接失败：%v", err)
+			app.setUpgradeError(err.Error())
 		}
 	}
 

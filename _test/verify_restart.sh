@@ -2,7 +2,9 @@
 # 复查：反复 restart 不产生孤儿进程、停止/启动可用、规范关闭生效
 set -uo pipefail
 
-FPK="/mnt/d/软件开发/fnos/dist/fwclient-1.0.2.fpk"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FPK="${FPK:-$(ls -1t "$REPO"/dist/*.fpk 2>/dev/null | head -n 1)}"
+[ -f "$FPK" ] || { echo "找不到 .fpk，请先执行 ./build.sh"; exit 1; }
 WORK="$(mktemp -d /tmp/fwc-extra-XXXXXX)"
 PASS=0
 FAIL=0
@@ -35,7 +37,8 @@ for i in 1 2 3 4; do
     R="$(curl -sS -m 25 -X POST -H 'Content-Type: application/json' -d '{}' \
         "http://127.0.0.1:18131/api/restart" -w '|%{http_code}')"
     T1=$(date +%s.%N)
-    D="$(echo "$T1 - $T0" | bc)"
+    # 用 awk 做浮点运算：bc 不是所有环境（如 CI 镜像）都预装
+    D="$(awk "BEGIN{printf \"%.3f\", $T1 - $T0}")"
     N="$(procs)"
     echo "  #$i 用时=${D}s 守护进程数=$N $R"
     case "$R" in
@@ -43,9 +46,9 @@ for i in 1 2 3 4; do
     *) no "restart#$i 返回异常" ;;
     esac
     check "$([ "$N" = "1" ] && echo 1 || echo 0)" "restart#$i 后仅有 1 个守护进程"
-    MAXT=$(echo "if ($D > $MAXT) $D else $MAXT" | bc)
+    MAXT="$(awk "BEGIN{print ($D > $MAXT) ? $D : $MAXT}")"
 done
-check "$(echo "$MAXT < 3" | bc)" "单次 restart 耗时 ${MAXT}s（< 3s，说明走了规范关闭）"
+check "$(awk "BEGIN{print ($MAXT < 3) ? 1 : 0}")" "单次 restart 耗时 ${MAXT}s（< 3s，说明走了规范关闭）"
 
 echo "== status =="
 S="$(curl -sS -m 8 "http://127.0.0.1:18131/api/status")"

@@ -5,7 +5,9 @@
 #   3) TLS 证书校验默认开启，只有向导明确关闭时才写 insecure=true
 set -uo pipefail
 
-FPK="/mnt/d/软件开发/fnos/dist/fwclient-1.0.2.fpk"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FPK="${FPK:-$(ls -1t "$REPO"/dist/*.fpk 2>/dev/null | head -n 1)}"
+[ -f "$FPK" ] || { echo "找不到 .fpk，请先执行 ./build.sh"; exit 1; }
 WORK="$(mktemp -d /tmp/fwc-fix-XXXXXX)"
 PASS=0
 FAIL=0

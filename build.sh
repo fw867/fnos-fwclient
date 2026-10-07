@@ -16,6 +16,7 @@ DIST="${ROOT}/dist"
 
 GO_BIN="${GO:-go}"
 FNPACK_BIN="${FNPACK:-${ROOT}/_tools/fnpack.exe}"
+PYTHON_BIN="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)}"
 if ! command -v "${GO_BIN}" >/dev/null 2>&1; then
     if [ -x "/c/Program Files/Go/bin/go.exe" ]; then
         GO_BIN="/c/Program Files/Go/bin/go.exe"
@@ -83,13 +84,21 @@ done
 if [ "${DO_PACK}" = "1" ]; then
     echo "==> 打包 .fpk"
     mkdir -p "${DIST}"
+    OUT_FPK="${DIST}/${APPNAME}-${VERSION}.fpk"
     if [ -x "${FNPACK_BIN}" ] || command -v "${FNPACK_BIN}" >/dev/null 2>&1; then
         rm -f "${ROOT}/${APPNAME}.fpk"
         "${FNPACK_BIN}" build --directory "${APP}"
-        mv -f "${ROOT}/${APPNAME}.fpk" "${DIST}/${APPNAME}-${VERSION}.fpk"
-        echo "    产物：${DIST}/${APPNAME}-${VERSION}.fpk"
+        mv -f "${ROOT}/${APPNAME}.fpk" "${OUT_FPK}"
+        if [ -n "${PYTHON_BIN}" ] && [ -f "${ROOT}/repack_fpk.py" ]; then
+            "${PYTHON_BIN}" "${ROOT}/repack_fpk.py" "${OUT_FPK}"
+        fi
+        echo "    产物：${OUT_FPK}"
+    elif [ -n "${PYTHON_BIN}" ] && [ -f "${ROOT}/pack_fpk.py" ]; then
+        echo "    未找到 fnpack，改用 pack_fpk.py 直接打包（布局与 fnpack 产物一致）"
+        "${PYTHON_BIN}" "${ROOT}/pack_fpk.py" "${APP}" "${OUT_FPK}"
+        echo "    产物：${OUT_FPK}"
     else
-        echo "    未找到 fnpack，跳过打包（可用 FNPACK=/path/to/fnpack 指定）"
+        echo "    未找到 fnpack 与 python，跳过打包（可用 FNPACK=/path/to/fnpack 指定）"
     fi
 fi
 
