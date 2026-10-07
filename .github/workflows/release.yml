@@ -1,9 +1,12 @@
 name: 构建与发布
 
-# 是否需要构建/发布，完全由提交信息决定（见 jobs.release.if）：
-#   提交信息里带 [release]   → 构建 + 验证 + 自动累加版本号 + 发 GitHub Release
-#   PR 标题里带 [release]    → 只构建 + 验证（合并前预检，不发布、不打标签）
-#   手动触发（workflow_dispatch）→ 同样走构建 + 发布，可用 dry_run 只验证
+# CI 只做两件事：把应用打包成 .fpk、发布到 GitHub Releases。
+# 端到端验证脚本（_test/verify_*.sh）需要真实网关与令牌，只在本地/WSL 跑，不放进 CI。
+#
+# 是否需要构建/发布，由提交信息决定（见 jobs.release.if）：
+#   提交信息里带 [release]   → 自动累加版本号 + 打包 + 发 GitHub Release
+#   PR 标题里带 [release]    → 只打包（合并前预检，不改版本、不发布）
+#   手动触发（workflow_dispatch）→ 同 push，可用 dry_run 只打包
 #
 # 发版流程：改完代码后正常提交，提交信息里写上 [release] 和更新说明，push 即可：
 #   git commit -m "feat: xxx [release]" -m "- 条目一；- 条目二"
@@ -98,26 +101,8 @@ jobs:
           bash build.sh
           ls -l "dist/fwclient-${VERSION}.fpk"
 
-      - name: 运行验证脚本
-        run: |
-          set -uo pipefail
-          if ! compgen -G "_test/verify_*.sh" >/dev/null; then
-            echo "没有验证脚本，跳过"
-            exit 0
-          fi
-          fail=0
-          for t in _test/verify_*.sh; do
-            echo "::group::$(basename "$t")"
-            if bash "$t"; then
-              echo "::notice::$(basename "$t") 通过"
-            else
-              echo "::error::$(basename "$t") 失败"
-              fail=1
-            fi
-            echo "::endgroup::"
-          done
-          exit "$fail"
-
+      # 这里刻意不跑 _test/verify_*.sh：CI 里没有网关域名与访问令牌，
+      # 端到端脚本只适合在本地/WSL 执行（见 README 第 6 节）
       - name: 生成校验和
         env:
           VERSION: ${{ steps.ver.outputs.version || steps.cur.outputs.version }}

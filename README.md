@@ -266,8 +266,9 @@ git push origin master
 
 1. 按 `backend/go.mod` 装 Go；把 `manifest` 的版本号补丁号 +1（`1.0.3` → `1.0.4`），
    同步 `backend/main.go` 的 `appVersion`，并用提交信息写成新的 `changelog` 条目
-   （只保留最近 6 个版本，manifest 不会无限变长）；
-2. `bash build.sh` 打包 → 顺序执行 `_test/verify_*.sh` → 生成 `dist/SHA256SUMS.txt`；
+   （只保留最近 6 个版本，manifest 不会无限变长）；2. `bash build.sh` 打包 → 生成 `dist/SHA256SUMS.txt`；
+   CI 里**不跑** `_test/verify_*.sh`：那些脚本需要真实网关域名与访问令牌，
+   只在本地/WSL 执行（见第 6 节）；
 3. 把版本号改动自动提交回 master（提交信息带 `[skip ci]`，不会再触发一轮），
    再打 `v<新版本>` 标签；
 4. 创建 Release，附 `.fpk` 与 `SHA256SUMS.txt`，说明由
@@ -278,9 +279,12 @@ git push origin master
 
 | 事件 | 条件 | 行为 |
 | --- | --- | --- |
-| push | 提交信息含 `[release]` | 构建 + 验证 + 累加版本 + 回写提交 + 发 Release |
-| pull_request | 标题含 `[release]` | 只构建 + 验证（合并前预检，不改版本、不发布、不打标签） |
-| 手动触发 | Actions 页面 Run workflow | 同 push；勾 `dry_run` 则只构建验证 |
+| push | 提交信息含 `[release]` | 打包 + 累加版本 + 回写提交 + 发 Release |
+| pull_request | 标题含 `[release]` | 只打包（合并前预检，不改版本、不发布、不打标签） |
+| 手动触发 | Actions 页面 Run workflow | 同 push；勾 `dry_run` 则只打包 |
+
+- **CI 只打包发版**：装 Go、`build.sh`、算校验和、发 Release，
+  端到端验证（启停、重复进程、页面结构等 118 项）在本地跑，不占用 CI 时间；
 
 - **版本号是累加的**：CI 只改 `X.Y.Z` 的最后一位。要发 `1.1.0` 这类版本，
   先把 `manifest` 的 version 手改成 `1.1.0`，之后 CI 从 `1.1.1` 继续；
